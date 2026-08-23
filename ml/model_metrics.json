@@ -1,0 +1,26 @@
+{
+  "bestModel": "random_forest",
+  "modelVersion": "random_forest-6a480314",
+  "trainedAt": "2026-08-23T12:10:46.734002+00:00",
+  "featureColumns": [
+    "elapsedMinutes",
+    "temperature",
+    "humidity",
+    "rhGapToEquilibrium",
+    "humidityRate15",
+    "humidityRate30",
+    "temperatureRate30"
+  ],
+  "trainRows": 5775,
+  "testRows": 1338,
+  "random_forest": {
+    "mae_minutes": 85.49,
+    "rmse_minutes": 148.92,
+    "r2": 0.5718
+  },
+  "gradient_boosting": {
+    "mae_minutes": 93.33,
+    "rmse_minutes": 154.11,
+    "r2": 0.5415
+  }
+}

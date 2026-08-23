@@ -9,6 +9,7 @@ import commandRoutes from './routes/commandRoutes';
 import dryerRoutes from './routes/dryerRoutes';
 import sessionRoutes from './routes/sessionRoutes';
 import analyticsRoutes from './routes/analyticsRoutes';
+import predictionRoutes from './routes/predictionRoutes';
 import alertRoutes from './routes/alertRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import pushRoutes from './routes/pushRoutes';
@@ -54,6 +55,7 @@ export function createApp(): express.Express {
   api.use('/dryer', dryerRoutes);
   api.use('/sessions', sessionRoutes);
   api.use('/analytics', analyticsRoutes);
+  api.use('/predictions', predictionRoutes);
   api.use('/alerts', alertRoutes);
   api.use('/notifications', notificationRoutes);
   api.use('/push', pushRoutes);

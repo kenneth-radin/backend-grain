@@ -31,6 +31,7 @@ cp .env.example .env      # fill MONGODB_URI + JWT_SECRET
 npm run dev               # tsx watch
 npm run build && npm start
 npm run smoke             # full end-to-end test (in-memory Mongo)
+npm run export-training-data   # export completed real sessions → ml/data/exported_sessions.csv
 ```
 
 `.env` keys:
@@ -41,6 +42,9 @@ npm run smoke             # full end-to-end test (in-memory Mongo)
 | `MONGODB_URI` | yes | Atlas SRV string. Values containing `<db_password>` fail fast at boot. `MONGO_URI` accepted as alias. |
 | `JWT_SECRET` | yes | any long random string |
 | `OPENAI_API_KEY` | no | enables LLM replies for `/api/v1/assistant/chat`; without it a built-in EN/FIL agronomy fallback answers |
+| `ML_SERVICE_URL` | no | Python prediction microservice (`ml/`); unset = physics-fallback estimator only |
+| `TARGET_MOISTURE_PCT` | no | target grain moisture for the completion criterion (default 14) |
+| `COMPLETION_SUSTAIN_MINUTES` | no | minutes exhaust RH must stay at equilibrium before "complete" (default 30) |
 | `FIREBASE_*` | no | optional RTDB mirroring only; never the primary store |
 
 ## API surface (all under `/api`)
@@ -54,6 +58,7 @@ npm run smoke             # full end-to-end test (in-memory Mongo)
 | Dryer direct | `POST /dryer/:deviceId/start|stop|fan|stepper|relay|heater` |
 | Sessions | `GET /sessions?status&deviceId&page&limit`, `GET /sessions/:id`, `POST /sessions`, `PATCH /sessions/:id {action:'complete'|'abort'}` |
 | Analytics | `GET /analytics/overview?period=daily|weekly|monthly` |
+| Predictions (AI) | `GET /predictions/:sessionId?history=true&limit=20` *(remaining drying time + ETA; auto-refreshed on sensor ingress)* |
 | Alerts | `GET /alerts`, `PATCH /alerts/:id/read`, `DELETE /alerts` |
 | Notifications | `GET /notifications?page&limit&unread`, `PATCH /notifications {ids}|{markAll:true}`, `POST /notifications/fcm-token`, `DELETE /notifications/fcm-token` |
 | Push (legacy) | `POST /push/token {pushToken}` |

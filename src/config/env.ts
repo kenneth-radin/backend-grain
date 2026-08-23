@@ -50,6 +50,7 @@ if (jwtSecret.length < 24) {
 }
 
 const firebaseDatabaseUrl = (process.env.FIREBASE_DATABASE_URL || '').trim();
+const mlServiceUrl = (process.env.ML_SERVICE_URL || '').trim();
 
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -61,6 +62,17 @@ export const env = {
   deviceOfflineAfterMs: Number(process.env.DEVICE_OFFLINE_AFTER_MS || 5 * 60 * 1000),
   /** High-temperature alert threshold (deg C) for DHT22 readings. */
   highTempThresholdC: Number(process.env.HIGH_TEMP_THRESHOLD_C || 65),
+  // --- AI predictive-analytics settings (DHT22-only) ---
+  /** Base URL of the Python ML prediction microservice; empty = physics fallback only. */
+  mlServiceUrl,
+  /** Version label recorded on predictions produced by the served model. */
+  mlModelVersion: (process.env.ML_MODEL_VERSION || 'v1').trim(),
+  /** Target grain moisture (%) for the equilibrium-RH completion criterion. */
+  targetMoisturePct: Number(process.env.TARGET_MOISTURE_PCT || 14),
+  /** Exhaust RH must stay <= equilibrium threshold this long to mark completion. */
+  completionSustainMinutes: Number(process.env.COMPLETION_SUSTAIN_MINUTES || 30),
+  /** Minimum spacing between stored predictions per session. */
+  predictionMinIntervalMs: Number(process.env.PREDICTION_MIN_INTERVAL_MS || 60_000),
   openaiApiKey: (process.env.OPENAI_API_KEY || '').trim(),
   firebase: {
     enabled: Boolean(firebaseDatabaseUrl),

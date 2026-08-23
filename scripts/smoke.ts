@@ -169,6 +169,61 @@ async function main(): Promise<void> {
     notificationId = notifBody.data[0]._id;
   });
 
+  await check('AI predictions: fallback pipeline + throttle + route', async () => {
+    // Active AI-test session on its own device. Backdated 28h so its
+    // readings never land in *today's* analytics buckets (checked later).
+    const aiStart = new Date(Date.now() - 28 * 3_600_000);
+    const { DryingSession } = await import('../src/models/DryingSession');
+    const { SensorDatum } = await import('../src/models/SensorDatum');
+    const { Prediction } = await import('../src/models/Prediction');
+    const { refreshLatestForDevice } = await import('../src/services/predictionService');
+    const { completionRhThreshold } = await import('../src/services/emc');
+
+    const aiUser = await j(await fetch(`${base}/auth/me`, { headers: { Authorization: `Bearer ${token}` } }));
+    const aiSession = await DryingSession.create({
+      deviceId: 'GR-AI',
+      userId: aiUser.data.user._id,
+      grainType: 'rice',
+      status: 'active',
+      startedAt: aiStart
+    });
+
+    // Decaying exhaust-RH signature toward the equilibrium threshold at 46°C.
+    const threshold = completionRhThreshold(46, 14);
+    const docs = [];
+    for (let t = 0; t <= 180; t += 5) {
+      docs.push({
+        deviceId: 'GR-AI',
+        temperature: 46,
+        humidity: Math.min(95, threshold + 28 * Math.exp(-0.007 * t)),
+        status: 'running',
+        timestamp: new Date(aiStart.getTime() + t * 60_000)
+      });
+    }
+    await SensorDatum.insertMany(docs);
+
+    await refreshLatestForDevice('GR-AI');
+    let count = await Prediction.countDocuments({ sessionId: aiSession._id });
+    assert(count === 1, `expected 1 prediction, got ${count}`);
+    const pred = await Prediction.findOne({ sessionId: aiSession._id }).lean();
+    assert(pred!.source === 'physics_fallback', `source=${pred!.source}`);
+    assert(
+      pred!.remainingMinutes >= 300 && pred!.remainingMinutes <= 500,
+      `remainingMinutes=${pred!.remainingMinutes} outside plausible band`
+    );
+
+    await refreshLatestForDevice('GR-AI'); // throttled
+    count = await Prediction.countDocuments({ sessionId: aiSession._id });
+    assert(count === 1, `throttle failed, got ${count}`);
+
+    const res = await fetch(`${base}/predictions/${aiSession._id}?history=true`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    assert(res.status === 200, `route status ${res.status}`);
+    const body = await j(res);
+    assert(body.success === true && !!body.data.latest?.estimatedCompletionAt, 'route payload wrong');
+  });
+
   await check('PATCH /api/notifications → unreadCount 0', async () => {
     const list = await j(await fetch(`${base}/notifications`, { headers: { Authorization: `Bearer ${token}` } }));
     const allIds = list.data.map((n: any) => n._id);

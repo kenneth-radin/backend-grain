@@ -3,6 +3,7 @@ import { SensorDatum } from '../models/SensorDatum';
 import { Device } from '../models/Device';
 import { mirrorDeviceReading } from '../config/firebase';
 import { createAlert } from '../services/notificationService';
+import { refreshLatestForDevice } from '../services/predictionService';
 import { env } from '../config/env';
 import { ApiError, asyncHandler, clamp, parseIntParam } from '../utils/http';
 
@@ -122,6 +123,10 @@ export const ingestSensorData = asyncHandler(async (req: Request, res: Response)
 
   // Optional RTDB mirror (fire-and-forget).
   mirrorDeviceReading(deviceId, temperature, humidity, status);
+
+  // Continuous AI prediction refresh (fire-and-forget, throttled internally so
+  // frequent ESP posts do not spam predictions).
+  void refreshLatestForDevice(deviceId);
 
   // High-temperature safety alert (deduped in notificationService).
   if (temperature >= env.highTempThresholdC) {

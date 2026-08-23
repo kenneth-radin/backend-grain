@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "type-check": "tsc --noEmit",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "export-training-data": "tsx scripts/exportTrainingData.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
