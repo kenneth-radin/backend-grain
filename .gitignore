@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# environment (NEVER commit real secrets)
+.env
+.env.local
+
+# logs / misc
+*.log
+.DS_Store
+
+# environment backups / variants (NEVER commit real secrets)
+.env.*
+!.env.example
