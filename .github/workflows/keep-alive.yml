@@ -1,0 +1,20 @@
+name: Keep-alive ping
+
+# Pings both Render free-tier services every 10 minutes so they never
+# sleep — prevents 30-90s cold starts on the mobile app.
+# Note: GitHub may auto-disable scheduled workflows after 60 days of
+# repo inactivity — just re-push or re-enable from the Actions tab then.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping API
+        run: curl -fsS --max-time 60 https://backend-grain.onrender.com/api/ping || true
+
+      - name: Ping ML service
+        run: curl -fsS --max-time 60 https://grain-ml.onrender.com/health || true

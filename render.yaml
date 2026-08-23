@@ -1,0 +1,42 @@
+services:
+  # ── Main REST API (Express + MongoDB) ──────────────────────
+  - type: web
+    name: grain-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      # AI prediction microservice (defined below) — wired automatically
+      - key: ML_SERVICE_URL
+        fromService:
+          type: web
+          name: grain-ml
+          property: host
+      - key: ML_MODEL_VERSION
+        value: random_forest-6a480314
+      - key: FIREBASE_DATABASE_URL
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+
+  # ── AI prediction microservice (FastAPI + Random Forest) ───
+  - type: web
+    name: grain-ml
+    runtime: python
+    plan: free
+    rootDir: ml
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn service:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health

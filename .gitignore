@@ -15,7 +15,6 @@ dist/
 # python (ml pipeline) caches and generated artifacts
 __pycache__/
 *.pyc
-ml/model.joblib
 ml/data/
 
 # environment backups / variants (NEVER commit real secrets)
