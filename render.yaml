@@ -10,6 +10,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Pin to Node 22 LTS — Render's default (Node 26) breaks the tsc build
+      - key: NODE_VERSION
+        value: "22"
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
