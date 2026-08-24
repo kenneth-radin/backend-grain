@@ -60,7 +60,7 @@ export function createApp(): express.Express {
   api.use('/notifications', notificationRoutes);
   api.use('/push', pushRoutes);
   api.use('/users', userRoutes);
-  api.use('/v1/assistant', assistantRoutes);
+    api.use('/assistant', assistantRoutes);
 
   app.use('/api', api);
 
