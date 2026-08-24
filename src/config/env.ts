@@ -57,7 +57,9 @@ export const env = {
   port: Number(process.env.PORT || 8080),
   mongoUri,
   jwtSecret,
-  jwtExpiresIn: (process.env.JWT_EXPIRES_IN || '30d').trim(),
+    jwtExpiresIn: (process.env.JWT_EXPIRES_IN || '30d').trim(),
+  /** Base URL of the mobile app, used for password-reset deep links. */
+  appUrl: (process.env.APP_URL || 'https://grain.app').trim(),
   /** Devices whose lastSeen is older than this are reported offline. */
   deviceOfflineAfterMs: Number(process.env.DEVICE_OFFLINE_AFTER_MS || 5 * 60 * 1000),
   /** High-temperature alert threshold (deg C) for DHT22 readings. */

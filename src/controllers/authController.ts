@@ -1,9 +1,13 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { User } from '../models/User';
+import { ResetToken } from '../models/ResetToken';
 import { serializeUser } from '../utils/serialize';
 import { signAccessToken } from '../utils/tokens';
 import { ApiError, asyncHandler } from '../utils/http';
+import { env } from '../config/env';
+
 
 /** POST /api/auth/register */
 export const register = asyncHandler(async (req: Request, res: Response) => {
@@ -85,4 +89,74 @@ export const me = asyncHandler(async (req: Request, res: Response) => {
 /** POST /api/auth/logout — client drops the token; nothing to invalidate. */
 export const logout = asyncHandler(async (_req: Request, res: Response) => {
   res.json({ success: true, data: { message: 'Logged out' } });
+});
+
+/** POST /api/auth/forgot — generate a reset token for the given email. */
+export const forgot = asyncHandler(async (req: Request, res: Response) => {
+  const { email } = (req.body || {}) as { email?: string };
+
+  if (!email || !/^\S+@\S+\.\S+$/.test(String(email).trim().toLowerCase())) {
+    throw new ApiError(400, 'A valid email address is required');
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const user = await User.findOne({ email: normalizedEmail }).lean();
+
+  // Always return the same response shape to avoid leaking which emails are registered.
+  if (!user) {
+    res.status(200).json({
+      success: true,
+      data: { message: 'If that email is registered, a reset link has been sent.' }
+    });
+    return;
+  }
+
+  // Generate cryptographically-secure token.
+  const token = crypto.randomBytes(32).toString('hex');
+
+  // Store token (TTL index auto-deletes after 1 hour).
+  await ResetToken.create({ token, userId: user._id });
+
+    // Build a reset URL the client can surface to the user.
+  const resetUrl = `${env.appUrl}/reset-password?token=${token}`;
+
+  res.status(200).json({
+    success: true,
+    data: {
+      message: 'If that email is registered, a reset link has been sent.',
+      // Only return if the user exists — used to show a deep link to the user.
+      resetToken: user ? token : undefined,
+      resetUrl: user ? resetUrl : undefined
+    }
+  });
+});
+
+/** POST /api/auth/reset — consume a token and set a new password. */
+export const reset = asyncHandler(async (req: Request, res: Response) => {
+  const { token, password } = (req.body || {}) as { token?: string; password?: string };
+
+  if (!token || !password) {
+    throw new ApiError(400, 'Token and new password are required');
+  }
+  if (password.length < 6) {
+    throw new ApiError(400, 'Password must be at least 6 characters');
+  }
+
+  // Find token with non-expired TTL (MongoDB handles actual expiry, but double-check).
+  const resetToken = await ResetToken.findOne({ token }).exec();
+  if (!resetToken) {
+    throw new ApiError(400, 'Invalid or expired reset token');
+  }
+
+  // Update the user's password.
+  const passwordHash = await bcrypt.hash(password, 10);
+  await User.findByIdAndUpdate(resetToken.userId, { passwordHash });
+
+  // Delete the used token (single-use).
+  await ResetToken.deleteOne({ _id: resetToken._id });
+
+  res.json({
+    success: true,
+    data: { message: 'Password has been reset successfully.' }
+  });
 });
