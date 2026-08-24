@@ -6,7 +6,7 @@ const CommandSchema = new mongoose.Schema(
     /** Raw command string, e.g. 'START:AUTO:45:80' or 'STOP' */
     command: { type: String, required: true },
     commandStr: { type: String },
-    status: { type: String, enum: ['pending', 'executed', 'failed'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'executed', 'failed', 'superseded'], default: 'pending' },
     fanTarget: { type: String },
     fanAction: { type: String },
     relayAction: { type: String },
@@ -25,7 +25,7 @@ export interface ICommandDoc extends mongoose.Document {
   deviceId: string;
   command: string;
   commandStr?: string;
-  status: 'pending' | 'executed' | 'failed';
+  status: 'pending' | 'executed' | 'failed' | 'superseded';
   fanTarget?: string;
   fanAction?: string;
   relayAction?: string;

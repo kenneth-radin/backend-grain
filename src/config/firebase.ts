@@ -69,7 +69,25 @@ function ensureInit(): any {
   return admin;
 }
 
-/** Mirror the latest DHT22 reading to RTDB (best-effort, non-blocking caller). */
+/** Convert Mongo values (Date etc.) into RTDB-safe primitives. */
+function toRtdb(value: unknown): unknown {
+  if (value instanceof Date) return value.getTime();
+  if (Array.isArray(value)) return value.map(toRtdb);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (k === '_id' || k === '__v') continue;
+      out[k] = toRtdb(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Mirror the latest DHT22 reading to RTDB under the path/shape the mobile app
+ * listens to: grain/devices/{id}/sensors + status:'online'.
+ */
 export function mirrorDeviceReading(
   deviceId: string,
   temperature: number,
@@ -80,21 +98,56 @@ export function mirrorDeviceReading(
   try {
     const admin = ensureInit();
     const db = getDbFor(admin);
+    const nowIso = new Date().toISOString();
     void db
-      .ref(`devices/${deviceId}`)
+      .ref(`grain/devices/${deviceId}`)
       .update({
-        temperature,
-        humidity,
-        status,
-        updatedAt: new Date().toISOString()
+        status: 'online',
+        sensors: { temperature, humidity, status, updatedAt: nowIso },
+        updatedAt: nowIso
       })
       .catch((err: unknown) => {
         console.warn('[grAIn API] RTDB mirror failed:', err instanceof Error ? err.message : err);
       });
   } catch (err) {
     console.warn(
-      '[grAIn API] RTDB mirror unavailable (is firebase-admin installed?):',
+      '[grAIn API] RTDB mirror unavailable:',
       err instanceof Error ? err.message : err
     );
+  }
+}
+
+/** Mirror the device's Mongo runtimeState so the app sees live command state. */
+export function mirrorRuntimeState(deviceId: string, runtimeState: unknown): void {
+  if (!isFirebaseMirrorEnabled() || !runtimeState || typeof runtimeState !== 'object') return;
+  try {
+    const admin = ensureInit();
+    const db = getDbFor(admin);
+    const clean = toRtdb(runtimeState);
+    void db
+      .ref(`grain/devices/${deviceId}/runtimeState`)
+      .update(clean as Record<string, unknown>)
+      .catch((err: unknown) => {
+        console.warn('[grAIn API] RTDB runtimeState mirror failed:', err instanceof Error ? err.message : err);
+      });
+  } catch (err) {
+    console.warn('[grAIn API] RTDB runtimeState mirror unavailable:', err instanceof Error ? err.message : err);
+  }
+}
+
+/** Tell listening apps a queued command was executed (or failed) by hardware. */
+export function mirrorCommandExecuted(deviceId: string, command: string, ok: boolean): void {
+  if (!isFirebaseMirrorEnabled()) return;
+  try {
+    const admin = ensureInit();
+    const db = getDbFor(admin);
+    void db
+      .ref(`grain/commands/${deviceId}/executed`)
+      .set({ command, ok, executedAt: Date.now() })
+      .catch((err: unknown) => {
+        console.warn('[grAIn API] RTDB executed mirror failed:', err instanceof Error ? err.message : err);
+      });
+  } catch (err) {
+    console.warn('[grAIn API] RTDB executed mirror unavailable:', err instanceof Error ? err.message : err);
   }
 }

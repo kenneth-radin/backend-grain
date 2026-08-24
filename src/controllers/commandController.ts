@@ -3,6 +3,7 @@ import { Command } from '../models/Command';
 import { Device } from '../models/Device';
 import { parseCommandString } from '../services/commandParser';
 import { enqueueCommand } from '../services/commandService';
+import { mirrorCommandExecuted, mirrorRuntimeState } from '../config/firebase';
 import { ApiError, asyncHandler } from '../utils/http';
 
 /** POST /api/commands { deviceId, command } */
@@ -64,5 +65,63 @@ export const listCommandsForDevice = asyncHandler(async (req: Request, res: Resp
   }
 
   const commands = await Command.find({ deviceId }).sort({ createdAt: -1 }).limit(50).lean();
+
+  // Mirror the polled runtimeState so the mobile app sees pending state live.
+  const polledDoc = await Device.findOne({ deviceId }, { runtimeState: 1 }).lean();
+  mirrorRuntimeState(deviceId, polledDoc?.runtimeState);
+
   res.json({ success: true, data: commands });
+});
+
+/**
+ * POST /api/commands/ack — ESP32 acknowledgement (PUBLIC).
+ * Body: { deviceId, command, status?: 'executed'|'failed' }.
+ * Marks every matching pending command as executed/failed so it is never
+ * replayed by later polls or reboots, refreshes the heartbeat, mirrors the new
+ * runtimeState + executed flag to Firebase for the mobile app.
+ */
+export const ackCommand = asyncHandler(async (req: Request, res: Response) => {
+  const body = (req.body || {}) as { deviceId?: string; command?: string; status?: string };
+  const deviceId = String(body.deviceId || '').trim();
+  const command = String(body.command || '').trim().toUpperCase();
+  const failed = String(body.status || '').trim().toLowerCase() === 'failed';
+
+  if (!deviceId) throw new ApiError(400, 'deviceId is required');
+  if (!command) throw new ApiError(400, 'command is required');
+
+  // Case-insensitive match against pending commands for this device.
+  const pending = await Command.find({ deviceId, status: 'pending' }).select('command').lean();
+  const matchedIds = pending
+    .filter((c) => String(c.command).trim().toUpperCase() === command)
+    .map((c) => c._id);
+
+  if (matchedIds.length > 0) {
+    await Command.updateMany(
+      { _id: { $in: matchedIds } },
+      { $set: { status: failed ? 'failed' : 'executed' } }
+    );
+  }
+
+  const now = new Date();
+  const set: Record<string, unknown> = {
+    lastSeen: now,
+    isOnline: true,
+    status: 'online',
+    'runtimeState.commandStatus': failed ? 'failed' : 'executed',
+    'runtimeState.commandAcknowledged': !failed,
+    'runtimeState.pendingCommand': null,
+    'runtimeState.lastHeartbeat': now
+  };
+  if (command === 'STOP') set['runtimeState.activeCommand'] = null;
+
+  const updated = await Device.findOneAndUpdate(
+    { deviceId },
+    { $set: set },
+    { upsert: true, new: true }
+  ).lean();
+
+  mirrorRuntimeState(deviceId, updated?.runtimeState);
+  mirrorCommandExecuted(deviceId, command, !failed);
+
+  res.json({ success: true, data: { acknowledged: true, updated: matchedIds.length } });
 });

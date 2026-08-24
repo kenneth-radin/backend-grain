@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { SensorDatum } from '../models/SensorDatum';
 import { Device } from '../models/Device';
-import { mirrorDeviceReading } from '../config/firebase';
+import { mirrorDeviceReading, mirrorRuntimeState } from '../config/firebase';
 import { createAlert } from '../services/notificationService';
 import { refreshLatestForDevice } from '../services/predictionService';
 import { env } from '../config/env';
@@ -121,8 +121,10 @@ export const ingestSensorData = asyncHandler(async (req: Request, res: Response)
     )
   ]);
 
-  // Optional RTDB mirror (fire-and-forget).
+  // Optional RTDB mirror (fire-and-forget): live sensors + runtimeState.
   mirrorDeviceReading(deviceId, temperature, humidity, status);
+  const devDoc = await Device.findOne({ deviceId }, { runtimeState: 1 }).lean();
+  mirrorRuntimeState(deviceId, devDoc?.runtimeState);
 
   // Continuous AI prediction refresh (fire-and-forget, throttled internally so
   // frequent ESP posts do not spam predictions).

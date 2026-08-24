@@ -1,6 +1,7 @@
 import { Command, ICommandDoc } from '../models/Command';
 import { Device } from '../models/Device';
 import { ParsedCommand } from './commandParser';
+import { mirrorRuntimeState } from '../config/firebase';
 
 /**
  * Creates a pending Command document for a device and optimistically updates
@@ -23,6 +24,14 @@ export async function enqueueCommand(
       }
     },
     { upsert: true }
+  );
+
+  // Exactly-one-execution semantics: any newly enqueued command supersedes
+  // all older pending ones, so a STOP can never be overridden by a stale
+    // queued START and one button press results in one execution.
+  await Command.updateMany(
+    { deviceId, status: 'pending' },
+    { $set: { status: 'superseded' } }
   );
 
   const command = await Command.create({
@@ -78,6 +87,10 @@ export async function enqueueCommand(
   if (parsed.heaterAction) set['runtimeState.heaterState'] = parsed.heaterAction;
 
   await Device.updateOne({ deviceId }, { $set: set });
+
+  // Mirror the optimistic runtimeState + lastCommand so the app UI reacts instantly.
+  const enqueuedDoc = await Device.findOne({ deviceId }, { runtimeState: 1 }).lean();
+  mirrorRuntimeState(deviceId, enqueuedDoc?.runtimeState);
 
   return command;
 }
