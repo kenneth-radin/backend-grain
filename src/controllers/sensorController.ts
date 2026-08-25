@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
 import { SensorDatum } from '../models/SensorDatum';
 import { Device } from '../models/Device';
+import { DryingSession } from '../models/DryingSession';
 import { mirrorDeviceReading, mirrorRuntimeState } from '../config/firebase';
 import { createAlert } from '../services/notificationService';
 import { refreshLatestForDevice } from '../services/predictionService';
 import { env } from '../config/env';
-import { ApiError, asyncHandler, clamp, parseIntParam } from '../utils/http';
+import { ApiError, asyncHandler, clamp, parseIntParam, round1 } from '../utils/http';
 
 /**
  * GET /api/sensors/:deviceId?page=1&limit=50&hours=24
@@ -86,6 +87,29 @@ export const latestForAllDevices = asyncHandler(async (_req: Request, res: Respo
  * Extra fields are accepted but silently dropped. Also refreshes the device
  * heartbeat (lastSeen/isOnline) and optionally mirrors to Firebase RTDB.
  */
+
+/**
+ * Incrementally update running avg temp/humidity + dataPoints of the active
+ * drying session for a device so the dashboard shows LIVE averages (not just
+ * values computed at session finalization).
+ */
+async function updateActiveSessionAverages(
+  deviceId: string,
+  temperature: number,
+  humidity: number
+): Promise<void> {
+  const active = await DryingSession.findOne({ deviceId, status: 'active' }).lean();
+  if (!active) return;
+  const n = (active.dataPoints || 0) + 1;
+  const prevT = active.avgTemperature || 0;
+  const prevH = active.avgHumidity || 0;
+  const newAvgT = round1((prevT * (n - 1) + temperature) / n);
+  const newAvgH = round1((prevH * (n - 1) + humidity) / n);
+  await DryingSession.updateOne(
+    { _id: active._id },
+    { $set: { avgTemperature: newAvgT, avgHumidity: newAvgH, dataPoints: n } }
+  );
+}
 export const ingestSensorData = asyncHandler(async (req: Request, res: Response) => {
   const body = (req.body || {}) as Record<string, unknown>;
 
@@ -144,6 +168,9 @@ export const ingestSensorData = asyncHandler(async (req: Request, res: Response)
   // Continuous AI prediction refresh (fire-and-forget, throttled internally so
   // frequent ESP posts do not spam predictions).
   void refreshLatestForDevice(deviceId);
+
+  // Keep the active session's avg temp/humidity live for the dashboard.
+  void updateActiveSessionAverages(deviceId, temperature, humidity);
 
   // High-temperature safety alert (deduped in notificationService).
   if (temperature >= env.highTempThresholdC) {
