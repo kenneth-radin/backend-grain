@@ -103,6 +103,18 @@ export const ingestSensorData = asyncHandler(async (req: Request, res: Response)
 
   const now = new Date();
 
+  // The UNO reports its ACTUAL run state every sample via S:<running|idle>.
+  // Treat it as ground truth so Mongo/Firebase can never drift from hardware.
+  const hwOn = status === 'running';
+  const hwSync: Record<string, unknown> = hwOn
+    ? { 'runtimeState.isRunning': true }
+    : {
+        'runtimeState.isRunning': false,
+        'runtimeState.heaterState': 'OFF',
+        'runtimeState.fan1State': 'OFF',
+        'runtimeState.fan2State': 'OFF',
+      };
+
   await Promise.all([
     SensorDatum.create({ deviceId, temperature, humidity, status, timestamp: now }),
     Device.updateOne(
@@ -114,7 +126,8 @@ export const ingestSensorData = asyncHandler(async (req: Request, res: Response)
           status: 'online',
           'runtimeState.currentTemperature': temperature,
           'runtimeState.currentHumidity': humidity,
-          'runtimeState.lastHeartbeat': now
+          'runtimeState.lastHeartbeat': now,
+          ...hwSync
         }
       },
       { upsert: true }
