@@ -108,10 +108,7 @@ export const ingestSensorData = asyncHandler(async (req: Request, res: Response)
   const hwOn = status === 'running';
   const hwSync: Record<string, unknown> = hwOn
     ? {
-        'runtimeState.isRunning': true,
-        'runtimeState.fan1State': 'ON',
-        'runtimeState.fan2State': 'ON',
-        'runtimeState.heaterState': 'ON'
+        'runtimeState.isRunning': true
       }
     : {
         'runtimeState.isRunning': false,
