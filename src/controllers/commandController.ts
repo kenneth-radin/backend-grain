@@ -4,7 +4,7 @@ import { Device } from '../models/Device';
 import { parseCommandString } from '../services/commandParser';
 import { enqueueCommand } from '../services/commandService';
 import { mirrorCommandExecuted, mirrorRuntimeState } from '../config/firebase';
-import { ApiError, asyncHandler } from '../utils/http';
+import { ApiError, asyncHandler, clamp, parseIntParam } from '../utils/http';
 
 /** POST /api/commands { deviceId, command } */
 export const createCommand = asyncHandler(async (req: Request, res: Response) => {
@@ -75,7 +75,12 @@ export const listCommandsForDevice = asyncHandler(async (req: Request, res: Resp
     );
   }
 
-  const commands = await Command.find({ deviceId }).sort({ createdAt: -1 }).limit(50).lean();
+  // Respect the ESP-raised ?limit so the payload stays small enough for the
+  // ESP8266 to parse (a hardcoded 50 produced ~10 KB responses that got
+  // truncated on the ESP and caused IncompleteInput).
+  const reqLimit = parseIntParam(req.query.limit, 50);
+  const cap = clamp(reqLimit, 1, 50);
+  const commands = await Command.find({ deviceId }).sort({ createdAt: -1 }).limit(cap).lean();
 
   // Mirror the polled runtimeState so the mobile app sees pending state live.
   const polledDoc = await Device.findOne({ deviceId }, { runtimeState: 1 }).lean();
