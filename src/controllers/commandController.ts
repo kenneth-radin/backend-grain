@@ -66,10 +66,11 @@ export const listCommandsForDevice = asyncHandler(async (req: Request, res: Resp
       }
     );
   } else {
-    // Polling alone proves the device is alive.
+    // Polling alone proves the device is alive. No pending command exists,
+    // so clear any stale pendingCommand left over from a lost-ACK command.
     await Device.updateOne(
       { deviceId },
-      { $set: { lastSeen: now, isOnline: true, status: 'online', 'runtimeState.lastHeartbeat': now } },
+      { $set: { lastSeen: now, isOnline: true, status: 'online', 'runtimeState.lastHeartbeat': now, 'runtimeState.pendingCommand': null } },
       { upsert: true }
     );
   }
