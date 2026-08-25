@@ -128,18 +128,26 @@ export const ingestSensorData = asyncHandler(async (req: Request, res: Response)
   const now = new Date();
 
   // The UNO reports its ACTUAL run state every sample via S:<running|idle>.
-  // Treat it as ground truth so Mongo/Firebase can never drift from hardware.
+  // Treat it as ground truth ONLY for run/stop transitions: when the hardware
+  // transitions running -> idle, clear all relay states (real stop happened).
+  // While the system is simply IDLE, relay states are owned by the commands
+  // (manual FAN/H1 control) and must NOT be overwritten every 3-second sample,
+  // otherwise manual fan/heater toggles get reverted by the next reading.
   const hwOn = status === 'running';
+  const devBefore = await Device.findOne({ deviceId }, { runtimeState: 1 }).lean();
+  const wasRunning = Boolean(devBefore?.runtimeState?.isRunning);
   const hwSync: Record<string, unknown> = hwOn
     ? {
         'runtimeState.isRunning': true
       }
-    : {
-        'runtimeState.isRunning': false,
-        'runtimeState.heaterState': 'OFF',
-        'runtimeState.fan1State': 'OFF',
-        'runtimeState.fan2State': 'OFF',
-      };
+    : wasRunning
+      ? {
+          'runtimeState.isRunning': false,
+          'runtimeState.heaterState': 'OFF',
+          'runtimeState.fan1State': 'OFF',
+          'runtimeState.fan2State': 'OFF',
+        }
+      : {};
 
   await Promise.all([
     SensorDatum.create({ deviceId, temperature, humidity, status, timestamp: now }),
