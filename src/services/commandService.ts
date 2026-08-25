@@ -63,6 +63,11 @@ export async function enqueueCommand(
   switch (true) {
     case parsed.command.startsWith('START'):
       set['runtimeState.isRunning'] = true;
+      // Mirror the hardware behavior of START: fans + heater energize.
+      // (AUTO thermostat adjustments happen later on the Arduino.)
+      set['runtimeState.heaterState'] = 'ON';
+      set['runtimeState.fan1State'] = 'ON';
+      set['runtimeState.fan2State'] = 'ON';
       break;
     case parsed.command === 'STOP':
       set['runtimeState.isRunning'] = false;
