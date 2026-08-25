@@ -35,6 +35,16 @@ export const listCommandsForDevice = asyncHandler(async (req: Request, res: Resp
   const deviceId = req.params.deviceId;
   const now = new Date();
 
+  // Stale-pending guard: any pending command older than STALE_PENDING_MS is
+  // marked failed so a lost-ACK command can never wedge the queue (and the
+  // app's pendingCommand guard) forever.
+  const STALE_PENDING_MS = 3 * 60 * 1000;
+  const staleCutoff = new Date(Date.now() - STALE_PENDING_MS);
+  await Command.updateMany(
+    { deviceId, status: 'pending', createdAt: { $lt: staleCutoff } },
+    { $set: { status: 'failed' } }
+  );
+
   const latestPending = await Command.findOne({ deviceId, status: 'pending' })
     .sort({ createdAt: -1 });
 
