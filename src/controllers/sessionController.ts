@@ -49,11 +49,21 @@ export const createSession = asyncHandler(async (req: Request, res: Response) =>
   const deviceId = String(body.deviceId || '').trim();
   if (!deviceId) throw new ApiError(400, 'deviceId is required');
 
-  // Guard: one active session per device at a time.
+  // Guard against duplicate active sessions on a device.
   const active = await DryingSession.findOne({ deviceId, status: 'active' }).lean();
   if (active) {
-    res.status(200).json({ success: true, data: active });
-    return;
+    // Idempotent re-start: if the REQUESTING user already runs this device's
+    // active session, return it. GET /sessions is userId-scoped, so returning
+    // the user's OWN session here is consistent (app keeps the banner).
+    if (String(active.userId) === String(user._id)) {
+      res.status(200).json({ success: true, data: active });
+      return;
+    }
+    // Real conflict: another user's active session occupies the device. Do NOT
+    // hand that foreign session to the requester — the app treats a 200 body as
+    // its own start (banner flashes), then GET /sessions (userId-scoped) cannot
+    // see the foreign session, so the banner vanished and History looked empty.
+    throw new ApiError(409, 'Device already has an active drying session');
   }
 
   await ensureDeviceExists(deviceId);
