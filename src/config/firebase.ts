@@ -98,3 +98,19 @@ export function mirrorCommandExecuted(deviceId: string, command: string, ok: boo
     executedAt: Date.now()
   }).catch((err) => warnOnce("executed mirror failed:", err));
 }
+
+/**
+ * Mirror the device-level lastCommand { action, timestamp } under the exact path
+ * the app's useRealtimeSensor() reads to decide whether an ACK is fresh:
+ *   grain/devices/{id}/lastCommand
+ * It must be refreshed on EVERY new command (and on ACK) so the app's
+ * executedAt > lastCommand.timestamp comparison resets cleanly and never
+ * sticks "acknowledged" from a previous command.
+ */
+export function mirrorLastCommand(deviceId: string, action: string): void {
+  if (!isFirebaseMirrorEnabled()) return;
+  rtdbPatch("/grain/devices/" + deviceId + "/lastCommand", {
+    action,
+    timestamp: Date.now()
+  }).catch((err) => warnOnce("lastCommand mirror failed:", err));
+}

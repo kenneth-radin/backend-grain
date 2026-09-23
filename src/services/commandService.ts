@@ -1,7 +1,8 @@
 import { Command, ICommandDoc } from '../models/Command';
 import { Device } from '../models/Device';
 import { ParsedCommand } from './commandParser';
-import { mirrorRuntimeState } from '../config/firebase';
+import { notifyDevice } from './pollNotifier';
+import { mirrorLastCommand, mirrorRuntimeState } from '../config/firebase';
 
 /**
  * Creates a pending Command document for a device and optimistically updates
@@ -46,6 +47,11 @@ export async function enqueueCommand(
     heaterAction: parsed.heaterAction,
     parameters: parsed.parameters
   });
+
+  // Wake any open long-poll request for this device (best-effort, per-instance)
+  // so a listening ESP/HTTP client gets the command without waiting the full
+  // poll interval.
+  notifyDevice(deviceId);
 
   // Optimistic runtime state update using dotted paths so unrelated fields
   // (e.g. currentTemperature) are preserved.
@@ -96,6 +102,11 @@ export async function enqueueCommand(
   // Mirror the optimistic runtimeState + lastCommand so the app UI reacts instantly.
   const enqueuedDoc = await Device.findOne({ deviceId }, { runtimeState: 1 }).lean();
   mirrorRuntimeState(deviceId, enqueuedDoc?.runtimeState);
+
+  // Mirror the device-level lastCommand { action, timestamp } so the app's
+  // ACK detection (executedAt > lastCommand.timestamp) resets correctly and
+  // never sticks true after the first command.
+  mirrorLastCommand(deviceId, parsed.command);
 
   return command;
 }

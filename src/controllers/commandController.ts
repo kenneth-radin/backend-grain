@@ -1,9 +1,11 @@
+import mongoose from 'mongoose';
 import { Request, Response } from 'express';
 import { Command } from '../models/Command';
 import { Device } from '../models/Device';
 import { parseCommandString } from '../services/commandParser';
 import { enqueueCommand } from '../services/commandService';
-import { mirrorCommandExecuted, mirrorRuntimeState } from '../config/firebase';
+import { waitForDeviceCommand } from '../services/pollNotifier';
+import { mirrorCommandExecuted, mirrorLastCommand, mirrorRuntimeState } from '../config/firebase';
 import { ApiError, asyncHandler, clamp, parseIntParam } from '../utils/http';
 
 /** POST /api/commands { deviceId, command } */
@@ -34,6 +36,16 @@ export const createCommand = asyncHandler(async (req: Request, res: Response) =>
 export const listCommandsForDevice = asyncHandler(async (req: Request, res: Response) => {
   const deviceId = req.params.deviceId;
   const now = new Date();
+
+  // Long-poll (best-effort, per-instance): if nothing is pending yet, hold the
+  // request open until a command is enqueued (notifyDevice) or the timeout
+  // elapses. Short-polling clients (e.g. the 3 s ESP8266 quick poll) skip this.
+  const longPoll = req.query.longPoll === '1' || req.query.longPoll === 'true';
+  if (longPoll) {
+    const lpTimeout = clamp(parseIntParam(req.query.timeout, 12000), 1000, 20000);
+    const hasPending = await Command.exists({ deviceId, status: 'pending' });
+    if (!hasPending) await waitForDeviceCommand(deviceId, lpTimeout);
+  }
 
   // Stale-pending guard: any pending command older than STALE_PENDING_MS is
   // marked failed so a lost-ACK command can never wedge the queue (and the
@@ -91,25 +103,49 @@ export const listCommandsForDevice = asyncHandler(async (req: Request, res: Resp
 
 /**
  * POST /api/commands/ack — ESP32 acknowledgement (PUBLIC).
- * Body: { deviceId, command, status?: 'executed'|'failed' }.
- * Marks every matching pending command as executed/failed so it is never
- * replayed by later polls or reboots, refreshes the heartbeat, mirrors the new
- * runtimeState + executed flag to Firebase for the mobile app.
+ * Body: { deviceId, command?, commandId?, status?: 'executed'|'failed' }.
+ * Clean pipeline: prefer ACKing by the exact Mongo _id (commandId), and fall
+ * back to the classic case-insensitive command-string match for older ESPs.
+ * Marks the matched pending command executed/failed so it is never replayed by
+ * later polls or reboots, refreshes the heartbeat, mirrors the new runtimeState
+ * + executed flag to Firebase for the mobile app. Idempotent: acked commands
+ * are no longer pending, so re-ACKs simply no-op.
  */
 export const ackCommand = asyncHandler(async (req: Request, res: Response) => {
-  const body = (req.body || {}) as { deviceId?: string; command?: string; status?: string };
+  const body = (req.body || {}) as { deviceId?: string; command?: string; status?: string; commandId?: string };
   const deviceId = String(body.deviceId || '').trim();
   const command = String(body.command || '').trim().toUpperCase();
+  const commandId = String(body.commandId || '').trim();
   const failed = String(body.status || '').trim().toLowerCase() === 'failed';
 
   if (!deviceId) throw new ApiError(400, 'deviceId is required');
-  if (!command) throw new ApiError(400, 'command is required');
 
-  // Case-insensitive match against pending commands for this device.
-  const pending = await Command.find({ deviceId, status: 'pending' }).select('command').lean();
-  const matchedIds = pending
-    .filter((c) => String(c.command).trim().toUpperCase() === command)
-    .map((c) => c._id);
+  let matchedIds: Array<mongoose.Types.ObjectId | string> = [];
+
+  // 1) Exact by-id match (the clean pipeline) — unambiguous even if two
+  //    different commands happen to share a case-insensitive string.
+  if (commandId) {
+    if (mongoose.isValidObjectId(commandId)) {
+      const c = await Command.findOne({ _id: commandId, deviceId, status: 'pending' })
+        .select('command')
+        .lean();
+      if (c) matchedIds = [c._id];
+    } else if (!command) {
+      throw new ApiError(400, 'a valid commandId or command is required');
+    }
+  }
+
+  // 2) Legacy fallback: case-insensitive match against pending commands.
+  if (matchedIds.length === 0 && command) {
+    const pending = await Command.find({ deviceId, status: 'pending' }).select('command').lean();
+    matchedIds = pending
+      .filter((c) => String(c.command).trim().toUpperCase() === command)
+      .map((c) => c._id);
+  }
+
+  if (matchedIds.length === 0 && !command) {
+    throw new ApiError(400, 'command (or a valid commandId) is required');
+  }
 
   if (matchedIds.length > 0) {
     await Command.updateMany(
@@ -137,7 +173,14 @@ export const ackCommand = asyncHandler(async (req: Request, res: Response) => {
   ).lean();
 
   mirrorRuntimeState(deviceId, updated?.runtimeState);
-  mirrorCommandExecuted(deviceId, command, !failed);
+  if (matchedIds.length > 0) {
+    const ackDoc = await Command.findOne({ _id: { $in: matchedIds } }).sort({ createdAt: -1 }).lean();
+    const executedCmd = ackDoc?.command ?? command;
+    mirrorCommandExecuted(deviceId, executedCmd, !failed);
+    // Refresh lastCommand timestamp so the app sees this ACK as fresh and the
+    // next enqueued command can reset the acknowledged flag again.
+    mirrorLastCommand(deviceId, executedCmd);
+  }
 
-  res.json({ success: true, data: { acknowledged: true, updated: matchedIds.length } });
+  res.json({ success: true, data: { acknowledged: matchedIds.length > 0, updated: matchedIds.length } });
 });

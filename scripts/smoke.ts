@@ -121,6 +121,72 @@ async function main(): Promise<void> {
     assert(dev.runtimeState.commandStatus === 'polled', `commandStatus=${dev.runtimeState.commandStatus}`);
   });
 
+  const cmdAuth = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+
+  await check('Clean pipeline: ACK by commandId flips pending → executed (not replayed)', async () => {
+    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId: 'GR-001', command: 'STOP' }) })));
+    const cmdId = created.data._id;
+    assert(created.data.status === 'pending' && cmdId, 'create failed');
+
+    // ESP-style poll returns it as pending (newest).
+    const poll1 = await j(await fetch(`${base}/commands/GR-001?limit=10`));
+    const mine1 = poll1.data.find((c: any) => c._id === cmdId);
+    assert(mine1 && mine1.status === 'pending', 'not pending on poll');
+
+    // ACK by exact id (clean pipeline).
+    const ack = await j(await fetch(`${base}/commands/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: 'GR-001', commandId: cmdId, status: 'executed' })
+    }));
+    assert(ack.success === true && ack.data.acknowledged === true, JSON.stringify(ack));
+
+    // Re-poll: no longer pending — clean transition, nothing left to replay.
+    const poll2 = await j(await fetch(`${base}/commands/GR-001?limit=10`));
+    const mine2 = poll2.data.find((c: any) => c._id === cmdId);
+    assert(mine2 && mine2.status === 'executed', `status=${mine2?.status}`);
+  });
+
+  await check('Clean pipeline: legacy ACK by command string still works', async () => {
+    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId: 'GR-001', command: 'FAN:FAN1:ON' }) }))).data;
+    const ack = await j(await fetch(`${base}/commands/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: 'GR-001', command: 'FAN:FAN1:ON', status: 'executed' })
+    }));
+    assert(ack.data.acknowledged === true && ack.data.updated === 1, JSON.stringify(ack));
+    const poll = await j(await fetch(`${base}/commands/GR-001?limit=10`));
+    const mine = poll.data.find((c: any) => c._id === created._id);
+    assert(mine && mine.status === 'executed', 'legacy ack did not apply');
+  });
+
+  await check('Clean pipeline: ACK by id marks failed', async () => {
+    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId: 'GR-001', command: 'R1:1' }) }))).data;
+    await fetch(`${base}/commands/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: 'GR-001', commandId: created._id, status: 'failed' })
+    });
+    const poll = await j(await fetch(`${base}/commands/GR-001?limit=10`));
+    const mine = poll.data.find((c: any) => c._id === created._id);
+    assert(mine && mine.status === 'failed', `status=${mine?.status}`);
+  });
+
+  await check('Long-poll: held GET wakes instantly when a command is created', async () => {
+    const device = 'GR-LP';
+    // Fire a long-poll that has nothing to return yet — it should HOLD…
+    const lpPromise = fetch(`${base}/commands/${device}?longPoll=1&timeout=8000`).then((r) => r.json());
+    await new Promise((r) => setTimeout(r, 80)); // let the server register the waiter
+    const start = Date.now();
+    // …and be woken the moment a command is enqueued for that device.
+    await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId: device, command: 'STOP' }) });
+    const body = await lpPromise;
+    const elapsed = Date.now() - start;
+    assert(elapsed < 4000, `long-poll did not wake early (${elapsed}ms)`);
+    const pending = body.data.filter((c: any) => c.deviceId === device && c.status === 'pending');
+    assert(pending.length >= 1, JSON.stringify(body.data));
+  });
+
   await check('Dryer fallback endpoints update runtimeState', async () => {
     const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     assert((await fetch(`${base}/dryer/GR-001/start`, { method: 'POST', headers: auth, body: '{"mode":"MANUAL","temperature":50}' })).status === 201, 'start failed');
@@ -249,7 +315,7 @@ async function main(): Promise<void> {
   });
 
   await check('Assistant chat local fallback replies', async () => {
-    const res = await fetch(`${base}/v1/assistant/chat`, {
+    const res = await fetch(`${base}/assistant/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: [{ role: 'user', content: 'What temperature for rice?' }], language: 'EN' })
