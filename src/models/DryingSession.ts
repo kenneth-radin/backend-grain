@@ -24,7 +24,9 @@ const DryingSessionSchema = new mongoose.Schema(
     duration: { type: Number },
     /** Percent of samples with temperature inside the grain's ideal band. */
     efficiency: { type: Number },
-    isSimulated: { type: Boolean, default: false }
+    isSimulated: { type: Boolean, default: false },
+    /** How the session ended: user action ("manual") or server timer ("timer"). */
+    completionSource: { type: String, enum: ['manual', 'timer'], default: 'manual' }
   },
   { timestamps: true, versionKey: false }
 );
@@ -42,6 +44,7 @@ export interface IDryingSessionDoc extends mongoose.Document {
   duration?: number;
   efficiency?: number;
   isSimulated?: boolean;
+  completionSource?: 'manual' | 'timer';
   createdAt: Date;
   updatedAt: Date;
 }

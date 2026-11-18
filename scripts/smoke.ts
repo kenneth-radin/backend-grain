@@ -46,7 +46,7 @@ async function main(): Promise<void> {
     assert(body.success === true && body.db === 'connected', JSON.stringify(body));
   });
 
-  await check('POST /api/auth/register → accessToken + user (no hash)', async () => {
+  await check('POST /api/auth/register → verification message (no hash, no token)', async () => {
     const res = await fetch(`${base}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -54,20 +54,23 @@ async function main(): Promise<void> {
     });
     assert(res.status === 201, `status ${res.status}`);
     const body = await j(res);
-    assert(body.data.accessToken, 'no accessToken');
-    assert(!('passwordHash' in body.data.user), 'passwordHash leaked!');
-    assert(body.data.user.email === 'juan@grain.local', 'wrong email');
-    token = body.data.accessToken;
+    assert(!body.data.accessToken, 'registration should not issue an access token');
+    assert(!body.data.user, 'registration should not return user object');
+    assert(body.data.message.includes('verify'), 'missing verification message');
+    assert(!('passwordHash' in (body.data as any)), 'passwordHash leaked!');
   });
 
-  await check('POST /api/auth/login → user', async () => {
+  await check('POST /api/auth/login → user + accessToken', async () => {
     const res = await fetch(`${base}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'juan@grain.local', password: 'secret123' })
     });
     assert(res.status === 200, `status ${res.status}`);
-    assert((await j(res)).data.user.name === 'Juan Farmer', 'bad user');
+    const body = await j(res);
+    assert(body.data.user.name === 'Juan Farmer', 'bad user');
+    assert(body.data.accessToken, 'no accessToken on login');
+    token = body.data.accessToken;
   });
 
   await check('POST /api/sensors/data (extra fields silently dropped)', async () => {
@@ -84,17 +87,95 @@ async function main(): Promise<void> {
     assert(body.accepted === true && body.data.accepted === true, JSON.stringify(body));
   });
 
+  let deviceId = 'GR-OWNER-TEST';
+  await check('POST /api/devices create device owned by test user', async () => {
+    const res = await fetch(`${base}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ deviceId: 'GR-OWNER-TEST', location: 'Test Barn' })
+    });
+    assert(res.status === 201, `status ${res.status}`);
+    const body = await j(res);
+    assert(body.data.deviceId === 'GR-OWNER-TEST', 'deviceId mismatch');
+    assert(body.data.ownerId, 'ownerId not set');
+  });
+
   await check('Device auto-provisioned online with DHT22 live values', async () => {
-    const res = await fetch(`${base}/devices`, { headers: { Authorization: `Bearer ${token}` } });
-    const dev = (await j(res)).data.find((d: any) => d.deviceId === 'GR-001');
-    assert(dev, 'GR-001 not in device list');
+    const res = await fetch(`${base}/sensors/data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId, temperature: 47.5, humidity: 61.2, status: 'running',
+        moisture: 12.3, weight: 99, batteryVoltage: 3.7 // must be dropped
+      })
+    });
+    assert(res.status === 200, `status ${res.status}`);
+    const body = await j(res);
+    assert(body.accepted === true && body.data.accepted === true, JSON.stringify(body));
+
+    // Verify device appears in user's device list
+    const devRes = await fetch(`${base}/devices`, { headers: { Authorization: `Bearer ${token}` } });
+    const dev = (await j(devRes)).data.find((d: any) => d.deviceId === deviceId);
+    assert(dev, `${deviceId} not in device list`);
     assert(dev.isOnline === true, 'device not online');
     assert(dev.runtimeState.currentTemperature === 47.5, 'temp missing');
     assert(dev.runtimeState.currentHumidity === 61.2, 'humidity missing');
   });
 
-  await check('GET /api/sensors/GR-001 paged history', async () => {
-    const res = await fetch(`${base}/sensors/GR-001?page=1&limit=10`, {
+  // --- Negative case: non-owner farmer cannot access another user's device ---
+  let secondToken = '';
+  let secondUserId = '';
+  await check('Register second farmer user (user B)', async () => {
+    const res = await fetch(`${base}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Second Farmer', email: 'second@grain.local', password: 'secret123' })
+    });
+    assert(res.status === 201, `status ${res.status}`);
+  });
+  await check('Login second farmer user (user B)', async () => {
+    const res = await fetch(`${base}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'second@grain.local', password: 'secret123' })
+    });
+    assert(res.status === 200, `status ${res.status}`);
+    const body = await j(res);
+    secondToken = body.data.accessToken;
+    const meRes = await fetch(`${base}/auth/me`, {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secondToken}` }
+    });
+    const meBody = await meRes.json();
+    secondUserId = meBody.data.user._id;
+  });
+
+  await check('User B gets 403 on GET /devices/:id for user A device', async () => {
+    const res = await fetch(`${base}/devices/${deviceId}`, {
+      headers: { Authorization: `Bearer ${secondToken}` }
+    });
+    assert(res.status === 403, `expected 403, got ${res.status}`);
+  });
+
+  await check('User B gets 403 on POST /commands for user A device', async () => {
+    const res = await fetch(`${base}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secondToken}` },
+      body: JSON.stringify({ deviceId, command: 'STOP' })
+    });
+    assert(res.status === 403, `expected 403, got ${res.status}`);
+  });
+
+  await check('User B gets 403 on POST /dryer/:deviceId/start for user A device', async () => {
+    const res = await fetch(`${base}/dryer/${deviceId}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secondToken}` },
+      body: JSON.stringify({ mode: 'MANUAL', temperature: 50 })
+    });
+    assert(res.status === 403, `expected 403, got ${res.status}`);
+  });
+
+  await check(`GET /api/sensors/${deviceId} paged history`, async () => {
+    const res = await fetch(`${base}/sensors/${deviceId}?page=1&limit=10`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     const body = await j(res);
@@ -107,7 +188,7 @@ async function main(): Promise<void> {
     const res = await fetch(`${base}/commands`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ deviceId: 'GR-001', command: 'START:AUTO:45:80' })
+      body: JSON.stringify({ deviceId, command: 'START:AUTO:45:80' })
     });
     assert(res.status === 201, `status ${res.status}`);
     const c = (await j(res)).data;
@@ -115,21 +196,21 @@ async function main(): Promise<void> {
     assert(c.parameters.mode === 'AUTO' && c.parameters.temperature === 45 && c.parameters.fanSpeed === 80, JSON.stringify(c.parameters));
   });
 
-  await check('GET /api/commands/GR-001 (ESP poll) marks polled', async () => {
-    assert((await fetch(`${base}/commands/GR-001`)).status === 200, 'poll failed');
-    const dev = (await j(await fetch(`${base}/devices`, { headers: { Authorization: `Bearer ${token}` } }))).data.find((d: any) => d.deviceId === 'GR-001');
+  await check(`GET /api/commands/${deviceId} (ESP poll) marks polled`, async () => {
+    assert((await fetch(`${base}/commands/${deviceId}`)).status === 200, 'poll failed');
+    const dev = (await j(await fetch(`${base}/devices`, { headers: { Authorization: `Bearer ${token}` } }))).data.find((d: any) => d.deviceId === deviceId);
     assert(dev.runtimeState.commandStatus === 'polled', `commandStatus=${dev.runtimeState.commandStatus}`);
   });
 
   const cmdAuth = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
   await check('Clean pipeline: ACK by commandId flips pending → executed (not replayed)', async () => {
-    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId: 'GR-001', command: 'STOP' }) })));
+    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId, command: 'STOP' }) })));
     const cmdId = created.data._id;
     assert(created.data.status === 'pending' && cmdId, 'create failed');
 
     // ESP-style poll returns it as pending (newest).
-    const poll1 = await j(await fetch(`${base}/commands/GR-001?limit=10`));
+    const poll1 = await j(await fetch(`${base}/commands/${deviceId}?limit=10`));
     const mine1 = poll1.data.find((c: any) => c._id === cmdId);
     assert(mine1 && mine1.status === 'pending', 'not pending on poll');
 
@@ -137,43 +218,50 @@ async function main(): Promise<void> {
     const ack = await j(await fetch(`${base}/commands/ack`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId: 'GR-001', commandId: cmdId, status: 'executed' })
+      body: JSON.stringify({ deviceId, commandId: cmdId, status: 'executed' })
     }));
     assert(ack.success === true && ack.data.acknowledged === true, JSON.stringify(ack));
 
     // Re-poll: no longer pending — clean transition, nothing left to replay.
-    const poll2 = await j(await fetch(`${base}/commands/GR-001?limit=10`));
+    const poll2 = await j(await fetch(`${base}/commands/${deviceId}?limit=10`));
     const mine2 = poll2.data.find((c: any) => c._id === cmdId);
     assert(mine2 && mine2.status === 'executed', `status=${mine2?.status}`);
   });
 
   await check('Clean pipeline: legacy ACK by command string still works', async () => {
-    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId: 'GR-001', command: 'FAN:FAN1:ON' }) }))).data;
+    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId, command: 'FAN:FAN1:ON' }) }))).data;
     const ack = await j(await fetch(`${base}/commands/ack`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId: 'GR-001', command: 'FAN:FAN1:ON', status: 'executed' })
+      body: JSON.stringify({ deviceId, command: 'FAN:FAN1:ON', status: 'executed' })
     }));
     assert(ack.data.acknowledged === true && ack.data.updated === 1, JSON.stringify(ack));
-    const poll = await j(await fetch(`${base}/commands/GR-001?limit=10`));
+    const poll = await j(await fetch(`${base}/commands/${deviceId}?limit=10`));
     const mine = poll.data.find((c: any) => c._id === created._id);
     assert(mine && mine.status === 'executed', 'legacy ack did not apply');
   });
 
   await check('Clean pipeline: ACK by id marks failed', async () => {
-    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId: 'GR-001', command: 'R1:1' }) }))).data;
+    const created = (await j(await fetch(`${base}/commands`, { method: 'POST', headers: cmdAuth, body: JSON.stringify({ deviceId, command: 'R1:1' }) }))).data;
     await fetch(`${base}/commands/ack`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId: 'GR-001', commandId: created._id, status: 'failed' })
+      body: JSON.stringify({ deviceId, commandId: created._id, status: 'failed' })
     });
-    const poll = await j(await fetch(`${base}/commands/GR-001?limit=10`));
+    const poll = await j(await fetch(`${base}/commands/${deviceId}?limit=10`));
     const mine = poll.data.find((c: any) => c._id === created._id);
     assert(mine && mine.status === 'failed', `status=${mine?.status}`);
   });
 
   await check('Long-poll: held GET wakes instantly when a command is created', async () => {
     const device = 'GR-LP';
+    // Register the device as owned by the test user first (ownership required for command submission).
+    await fetch(`${base}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ deviceId: device, location: 'Long Poll Barn' })
+    });
+
     // Fire a long-poll that has nothing to return yet — it should HOLD…
     const lpPromise = fetch(`${base}/commands/${device}?longPoll=1&timeout=8000`).then((r) => r.json());
     await new Promise((r) => setTimeout(r, 80)); // let the server register the waiter
@@ -189,12 +277,12 @@ async function main(): Promise<void> {
 
   await check('Dryer fallback endpoints update runtimeState', async () => {
     const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
-    assert((await fetch(`${base}/dryer/GR-001/start`, { method: 'POST', headers: auth, body: '{"mode":"MANUAL","temperature":50}' })).status === 201, 'start failed');
-    assert((await fetch(`${base}/dryer/GR-001/fan`, { method: 'POST', headers: auth, body: '{"fanTarget":"FAN1","fanAction":"ON"}' })).status === 201, 'fan failed');
-    assert((await fetch(`${base}/dryer/GR-001/stepper`, { method: 'POST', headers: auth, body: '{"stepperAction":"CW"}' })).status === 201, 'stepper failed');
-    assert((await fetch(`${base}/dryer/GR-001/relay`, { method: 'POST', headers: auth, body: '{"relayAction":"ON"}' })).status === 201, 'relay failed');
-    assert((await fetch(`${base}/dryer/GR-001/heater`, { method: 'POST', headers: auth, body: '{"heaterAction":"OFF"}' })).status === 201, 'heater failed');
-    assert((await fetch(`${base}/dryer/GR-001/stop`, { method: 'POST', headers: auth })).status === 201, 'stop failed');
+    assert((await fetch(`${base}/dryer/${deviceId}/start`, { method: 'POST', headers: auth, body: '{"mode":"MANUAL","temperature":50}' })).status === 201, 'start failed');
+    assert((await fetch(`${base}/dryer/${deviceId}/fan`, { method: 'POST', headers: auth, body: '{"fanTarget":"FAN1","fanAction":"ON"}' })).status === 201, 'fan failed');
+    assert((await fetch(`${base}/dryer/${deviceId}/stepper`, { method: 'POST', headers: auth, body: '{"stepperAction":"CW"}' })).status === 201, 'stepper failed');
+    assert((await fetch(`${base}/dryer/${deviceId}/relay`, { method: 'POST', headers: auth, body: '{"relayAction":"ON"}' })).status === 201, 'relay failed');
+    assert((await fetch(`${base}/dryer/${deviceId}/heater`, { method: 'POST', headers: auth, body: '{"heaterAction":"OFF"}' })).status === 201, 'heater failed');
+    assert((await fetch(`${base}/dryer/${deviceId}/stop`, { method: 'POST', headers: auth })).status === 201, 'stop failed');
   });
 
   await check('Sessions: create → active; complete → stats', async () => {

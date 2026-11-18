@@ -1,6 +1,8 @@
 import { env } from './config/env';
 import { connectDB } from './config/db';
 import { createApp } from './app';
+import { Device } from './models/Device';
+import { runAutoShutoffCheck } from './services/autoShutoff';
 
 async function main(): Promise<void> {
   const t0 = Date.now();
@@ -10,6 +12,41 @@ async function main(): Promise<void> {
   // Connect to MongoDB. On failure the server still boots (health stays up)
   // and retries in the background — friendly to Render free-tier cold starts.
   await connectDB();
+
+  // --- Ownerless-device safeguard ---
+  // ownerId is now required on the Device schema. Log a loud warning at boot
+  // (and every 60 minutes thereafter) if any documents are missing it, so the
+  // backfill isn't accidentally skipped after a deploy.
+  async function checkOwnerlessDevices(): Promise<void> {
+    try {
+      const count = await Device.countDocuments({
+        $or: [{ ownerId: { $exists: false } }, { ownerId: null }]
+      });
+      if (count > 0) {
+        console.warn(
+          `[grAIn API] WARNING: ${count} device(s) have no ownerId. ` +
+          `Run 'npm run backfill-device-owners' immediately to avoid ` +
+          `validation failures on device writes.`
+        );
+      }
+    } catch {
+      // Best-effort only: if the collection doesn't exist yet, skip silently.
+    }
+  }
+
+  await checkOwnerlessDevices();
+  // Re-check every 60 minutes so long-running servers catch devices created
+  // after the initial boot check.
+  setInterval(checkOwnerlessDevices, 60 * 60 * 1000).unref();
+
+  // --- Safety-critical auto-shutoff ---
+  // Server-authoritative: every 30s, stop any active session whose predicted
+  // completion time has passed. Does NOT depend on the mobile app being open.
+  // (Also run once at boot so a session that completed during downtime is
+  // caught immediately on startup, not 30s later.)
+  const AUTO_SHUTOFF_INTERVAL_MS = 30_000;
+  void runAutoShutoffCheck();
+  setInterval(runAutoShutoffCheck, AUTO_SHUTOFF_INTERVAL_MS).unref();
 
   const app = createApp();
 

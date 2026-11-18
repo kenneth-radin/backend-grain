@@ -18,7 +18,8 @@ const UserSchema = new Schema(
     bio: { type: String },
     phoneNumber: { type: String },
     location: { type: String },
-    pushToken: { type: String }
+    pushToken: { type: String },
+    emailVerified: { type: Boolean, default: false }
   },
   { timestamps: true }
 );
@@ -33,6 +34,7 @@ export interface IUserDoc extends mongoose.Document {
   phoneNumber?: string;
   location?: string;
   pushToken?: string;
+  emailVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

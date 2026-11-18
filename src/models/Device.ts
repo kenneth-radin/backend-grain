@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 export interface IRuntimeState {
   isRunning?: boolean;
@@ -55,10 +55,12 @@ const RuntimeStateSchema = new mongoose.Schema(
 const DeviceSchema = new mongoose.Schema(
   {
     deviceId: { type: String, required: true, unique: true, trim: true, index: true },
+    ownerId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     name: { type: String, trim: true },
     location: { type: String, required: true, trim: true },
     status: { type: String, enum: ['online', 'offline'], default: 'offline' },
     isOnline: { type: Boolean, default: false },
+    isSimulated: { type: Boolean, default: false },
     lastSeen: { type: Date, default: Date.now },
     runtimeState: { type: RuntimeStateSchema, default: () => ({}) }
   },
@@ -67,10 +69,12 @@ const DeviceSchema = new mongoose.Schema(
 
 export interface IDeviceDoc extends mongoose.Document {
   deviceId: string;
+  ownerId: mongoose.Types.ObjectId;
   name?: string;
   location: string;
   status: 'online' | 'offline';
   isOnline: boolean;
+  isSimulated: boolean;
   lastSeen: Date;
   runtimeState?: IRuntimeState;
   createdAt: Date;

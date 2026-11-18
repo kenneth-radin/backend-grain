@@ -15,7 +15,9 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     name?: string;
     email?: string;
     password?: string;
-    role?: string;
+    // role is intentionally NOT declared here. Any role field sent by the
+    // client is ignored before validation runs — there is no window where
+    // a submitted role can slip through to User.create.
   };
 
   const name = String(body.name || '').trim();
@@ -28,8 +30,11 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   if (!/^\S+@\S+\.\S+$/.test(email)) {
     throw new ApiError(400, 'Please provide a valid email address');
   }
-  if (password.length < 6) {
-    throw new ApiError(400, 'Password must be at least 6 characters');
+  if (password.length < 8 || !/[a-zA-Z]/.test(password) || !/\d/.test(password)) {
+    throw new ApiError(
+      400,
+      'Password must be at least 8 characters and contain at least one letter and one number'
+    );
   }
 
   const existing = await User.findOne({ email }).lean();
@@ -38,17 +43,20 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
+  // role is hardcoded server-side — body.role never reaches this line.
   const user = await User.create({
     name,
     email,
     passwordHash,
-    role: body.role === 'admin' ? 'admin' : 'farmer'
+    role: 'farmer',
+    emailVerified: false
   });
 
-  const accessToken = signAccessToken(String(user._id));
   res.status(201).json({
     success: true,
-    data: { accessToken, user: serializeUser(user) }
+    data: {
+      message: 'Registration successful. Please check your email to verify your account.'
+    }
   });
 });
 

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
+import { requireDeviceOwnership } from '../middleware/deviceOwnership';
 import { listDevices, getDevice, createDevice } from '../controllers/deviceController';
 
 const router = Router();
@@ -9,6 +10,6 @@ router.use(requireAuth);
 
 router.get('/', listDevices);
 router.post('/', createDevice);
-router.get('/:id', getDevice);
+router.get('/:id', requireDeviceOwnership((req) => req.params.id), getDevice);
 
 export default router;

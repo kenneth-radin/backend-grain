@@ -24,6 +24,7 @@ export async function connectDB(): Promise<boolean> {
   mongoose.set('strictQuery', true);
   try {
     await mongoose.connect(env.mongoUri, {
+      dbName: 'grain',
       serverSelectionTimeoutMS: 10_000,
       socketTimeoutMS: 30_000,
       maxPoolSize: 10

@@ -7,6 +7,7 @@ import { createAlert } from '../services/notificationService';
 import { refreshLatestForDevice } from '../services/predictionService';
 import { env } from '../config/env';
 import { ApiError, asyncHandler, clamp, parseIntParam, round1 } from '../utils/http';
+import { getAuthUser } from '../middleware/auth';
 
 /**
  * GET /api/sensors/:deviceId?page=1&limit=50&hours=24
@@ -44,9 +45,16 @@ export const listByDevice = asyncHandler(async (req: Request, res: Response) => 
 });
 
 /**
- * GET /api/sensors/data — latest reading for every device.
+ * GET /api/sensors/data — latest reading for every device the user owns (all for admin).
  */
-export const latestForAllDevices = asyncHandler(async (_req: Request, res: Response) => {
+export const latestForAllDevices = asyncHandler(async (req: Request, res: Response) => {
+  const user = getAuthUser(req);
+  const filter: Record<string, unknown> = {};
+  if (user.role !== 'admin') {
+    const ownedDevices = await Device.find({ ownerId: user._id }).distinct('deviceId').lean();
+    filter.deviceId = { $in: ownedDevices };
+  }
+
   const rows = await SensorDatum.aggregate<{
     _id: string;
     docId: unknown;
@@ -56,6 +64,9 @@ export const latestForAllDevices = asyncHandler(async (_req: Request, res: Respo
     timestamp: Date;
   }>([
     { $sort: { timestamp: -1 } },
+    {
+      $match: filter
+    },
     {
       $group: {
         _id: '$deviceId',

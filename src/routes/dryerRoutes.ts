@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
+import { requireDeviceOwnership } from '../middleware/deviceOwnership';
 import {
   startDryer,
   stopDryer,
@@ -12,11 +13,14 @@ import {
 const router = Router();
 
 // Direct dryer control fallback endpoints — PROTECTED (end-user facing).
-router.post('/:deviceId/start', requireAuth, startDryer);
-router.post('/:deviceId/stop', requireAuth, stopDryer);
-router.post('/:deviceId/fan', requireAuth, controlFan);
-router.post('/:deviceId/stepper', requireAuth, controlStepper);
-router.post('/:deviceId/relay', requireAuth, controlRelay);
-router.post('/:deviceId/heater', requireAuth, controlHeater);
+// User must own the target device (admin bypasses).
+const checkOwnership = requireDeviceOwnership((req) => req.params.deviceId);
+
+router.post('/:deviceId/start', requireAuth, checkOwnership, startDryer);
+router.post('/:deviceId/stop', requireAuth, checkOwnership, stopDryer);
+router.post('/:deviceId/fan', requireAuth, checkOwnership, controlFan);
+router.post('/:deviceId/stepper', requireAuth, checkOwnership, controlStepper);
+router.post('/:deviceId/relay', requireAuth, checkOwnership, controlRelay);
+router.post('/:deviceId/heater', requireAuth, checkOwnership, controlHeater);
 
 export default router;

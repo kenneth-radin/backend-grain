@@ -15,6 +15,7 @@ import notificationRoutes from './routes/notificationRoutes';
 import pushRoutes from './routes/pushRoutes';
 import assistantRoutes from './routes/assistantRoutes';
 import userRoutes from './routes/userRoutes';
+import adminRoutes from './routes/adminRoutes';
 
 /** eslint-disable @typescript-eslint/no-unused-vars */
 export function createApp(): express.Express {
@@ -60,6 +61,7 @@ export function createApp(): express.Express {
   api.use('/notifications', notificationRoutes);
   api.use('/push', pushRoutes);
   api.use('/users', userRoutes);
+  api.use('/admin', adminRoutes);
     api.use('/assistant', assistantRoutes);
 
   app.use('/api', api);

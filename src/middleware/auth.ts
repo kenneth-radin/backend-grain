@@ -49,3 +49,22 @@ export async function requireAuth(
     res.status(401).json({ success: false, error: 'Unauthorized: invalid or expired token' });
   }
 }
+
+/** Role guard: requires the authenticated user to have role 'admin'.
+ *  Assumes requireAuth has already run and populated req.user.
+ */
+export function requireAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const user = (req as AuthRequest).user;
+  if (!user || user.role !== 'admin') {
+    res.status(403).json({
+      success: false,
+      error: 'Forbidden: admin access required'
+    });
+    return;
+  }
+  next();
+}

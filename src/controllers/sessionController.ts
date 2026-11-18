@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { DryingSession } from '../models/DryingSession';
+import { Prediction } from '../models/Prediction';
 import { getAuthUser } from '../middleware/auth';
 import { notifyUser } from '../services/notificationService';
 import { finalizeSession, ensureDeviceExists } from '../services/sessionStats';
@@ -80,6 +81,25 @@ export const createSession = asyncHandler(async (req: Request, res: Response) =>
     dataPoints: 0,
     startedAt: new Date(),
     isSimulated: Boolean(body.isSimulated)
+  });
+
+  // Seed an initial prediction (1h32m / 92 min) so the app shows an end time
+  // immediately, before any sensor history accumulates. Real readings take
+  // over once enough data exists and the refresh throttle window elapses.
+  const DEFAULT_REMAINING_MINUTES = 92;
+  await Prediction.create({
+    sessionId: session._id,
+    deviceId: session.deviceId,
+    elapsedMinutes: 0,
+    temperature: 0,
+    humidity: 0,
+    rhGapToEquilibrium: null,
+    remainingMinutes: DEFAULT_REMAINING_MINUTES,
+    estimatedCompletionAt: new Date(Date.now() + DEFAULT_REMAINING_MINUTES * 60_000),
+    status: 'in_progress',
+    recommendation: 'CONTINUE_DRYING',
+    source: 'physics_fallback',
+    modelVersion: 'untrained'
   });
 
   void notifyUser({

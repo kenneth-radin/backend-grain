@@ -35,20 +35,35 @@ async function main(): Promise<void> {
     const base = 'http://localhost:8096/api';
 
     // Register a farmer (known-good public endpoint) to own the session.
+    // Registration no longer returns a token — login is required to obtain one.
     const regRes = await fetch(`${base}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'Pred Tester', email: 'pred@grain.local', password: 'secret123' })
     });
     assert(regRes.status === 201, `register -> ${regRes.status}`);
-    const regBody = (await regRes.json()) as { data: { accessToken: string; user: { _id: string } } };
-    const token = regBody.data.accessToken;
+
+    const loginRes = await fetch(`${base}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'pred@grain.local', password: 'secret123' })
+    });
+    assert(loginRes.status === 200, `login -> ${loginRes.status}`);
+    const loginBody = await loginRes.json();
+    const token = loginBody.data.accessToken;
+
+    // Look up the registered user's id to associate the session.
+    const meRes = await fetch(`${base}/auth/me`, {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+    });
+    const meBody = await meRes.json();
+    const userId = meBody.data.user._id;
 
     // Active session that started 3 hours ago.
     const startedAt = new Date(Date.now() - 180 * 60_000);
     const session = await DryingSession.create({
       deviceId: 'GR-PRED',
-      userId: regBody.data.user._id,
+      userId,
       grainType: 'rice',
       status: 'active',
       startedAt

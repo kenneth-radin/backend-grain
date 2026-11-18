@@ -14,7 +14,8 @@ const IDEAL_TEMP_MAX = 60;
  */
 export async function finalizeSession(
   session: IDryingSessionDoc,
-  status: 'completed' | 'aborted'
+  status: 'completed' | 'aborted',
+  completionSource: 'manual' | 'timer' = 'manual'
 ): Promise<IDryingSessionDoc> {
   const completedAt = new Date();
   const startedAt = new Date(session.startedAt);
@@ -45,6 +46,7 @@ export async function finalizeSession(
   const duration = Math.max(0, Math.round((completedAt.getTime() - startedAt.getTime()) / 1000)); // seconds
 
   session.status = status;
+  session.completionSource = completionSource;
   session.completedAt = completedAt;
   session.avgTemperature = avgTemperature;
   session.avgHumidity = avgHumidity;

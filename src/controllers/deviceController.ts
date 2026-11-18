@@ -2,14 +2,21 @@ import { Request, Response } from 'express';
 import { Device, IDeviceDoc } from '../models/Device';
 import { env } from '../config/env';
 import { ApiError, asyncHandler } from '../utils/http';
+import { getAuthUser } from '../middleware/auth';
 
-function isStale(device: Pick<IDeviceDoc, 'isOnline' | 'lastSeen'>): boolean {
+function isStale(device: Pick<IDeviceDoc, 'isOnline' | 'lastSeen' | 'isSimulated'>): boolean {
+  if (device.isSimulated) return false;
   return Boolean(device.isOnline) && Date.now() - new Date(device.lastSeen).getTime() > env.deviceOfflineAfterMs;
 }
 
 /** Decorate a device doc: report stale devices as offline (and persist it lazily). */
 function decorate(doc: Record<string, unknown>): Record<string, unknown> {
   const device = { ...(doc as Record<string, unknown>) };
+  if ((doc as Record<string, unknown>).isSimulated) {
+    device.status = 'online';
+    device.isOnline = true;
+    return device;
+  }
   if (isStale(doc as never)) {
     device.status = 'offline';
     device.isOnline = false;
@@ -22,8 +29,13 @@ function decorate(doc: Record<string, unknown>): Record<string, unknown> {
 }
 
 /** GET /api/devices */
-export const listDevices = asyncHandler(async (_req: Request, res: Response) => {
-  const docs = await Device.find({}).sort({ deviceId: 1 }).lean();
+export const listDevices = asyncHandler(async (req: Request, res: Response) => {
+  const user = getAuthUser(req);
+  const filter: Record<string, unknown> = {};
+  if (user.role !== 'admin') {
+    filter.ownerId = user._id;
+  }
+  const docs = await Device.find(filter).sort({ deviceId: 1 }).lean();
   res.json({ success: true, data: docs.map((d) => decorate(d)) });
 });
 
@@ -49,7 +61,8 @@ export const getDevice = asyncHandler(async (req: Request, res: Response) => {
 
 /** POST /api/devices { deviceId, location, name? } */
 export const createDevice = asyncHandler(async (req: Request, res: Response) => {
-  const body = (req.body || {}) as { deviceId?: string; location?: string; name?: string };
+  const user = getAuthUser(req);
+  const body = (req.body || {}) as { deviceId?: string; location?: string; name?: string; isSimulated?: boolean };
 
   const deviceId = String(body.deviceId || '').trim();
   const location = String(body.location || '').trim();
@@ -66,10 +79,12 @@ export const createDevice = asyncHandler(async (req: Request, res: Response) => 
 
   const created = await Device.create({
     deviceId,
+    ownerId: user._id,
     location,
     name: body.name ? String(body.name).trim() : undefined,
-    status: 'offline',
-    isOnline: false
+    status: body.isSimulated ? 'online' : 'offline',
+    isOnline: Boolean(body.isSimulated),
+    isSimulated: Boolean(body.isSimulated)
   });
 
   res.status(201).json({ success: true, data: created.toJSON() });
