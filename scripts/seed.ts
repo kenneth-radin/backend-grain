@@ -214,7 +214,7 @@ async function seedAlertsAndNotifications(
 
 async function main(): Promise<void> {
   console.log(`[seed] Connecting to ${uri.replace(/\/\/[^@]+@/, '//***@')} ...`);
-  await mongoose.connect(uri, { serverSelectionTimeoutMS: 20_000 });
+  await mongoose.connect(uri, { dbName: 'grain', serverSelectionTimeoutMS: 20_000 });
   console.log('[seed] Connected ✅');
 
   await Promise.all([
